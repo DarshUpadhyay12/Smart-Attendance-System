@@ -1,0 +1,26 @@
+[
+    {
+        "student_id": "STU-8",
+        "name": "Krutik Patel",
+        "enrollment": "145",
+        "branch": "AI/ML",
+        "session_id": "Morning Class",
+        "timestamp": "2026-03-27 11:50:43"
+    },
+    {
+        "student_id": "STU-6",
+        "name": "Darsh Upadhyay",
+        "enrollment": "018",
+        "branch": "CSE",
+        "session_id": "Morning Class",
+        "timestamp": "2026-03-27 11:50:19"
+    },
+    {
+        "student_id": "STU-7",
+        "name": "Krishna Parekh",
+        "enrollment": "042",
+        "branch": "AI/ML",
+        "session_id": "Morning Class",
+        "timestamp": "2026-03-27 11:50:08"
+    }
+]

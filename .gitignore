@@ -1,0 +1,30 @@
+# Node/Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+
+# Python/Backend
+backend/venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Data and Storage (Keep the folder structure but ignore the data files)
+backend/data/*.json
+!backend/data/.gitkeep
+backend/data/faces/*/*.jpg
+backend/data/faces/*/*.png
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
