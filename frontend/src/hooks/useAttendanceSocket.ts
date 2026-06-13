@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { WS_BASE_URL } from '../config';
 
-export function useAttendanceSocket(url: string = WS_BASE_URL) {
+export function useAttendanceSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  useEffect(() => {
-    const ws = new WebSocket(url);
-    
+  const connect = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+    const ws = new WebSocket(`${WS_BASE_URL}/ws/attendance`);
+
     ws.onopen = () => {
-      console.log('WebSocket Connected');
       setIsConnected(true);
+      console.log('WebSocket Connected');
     };
 
     ws.onmessage = (event) => {
@@ -19,16 +21,27 @@ export function useAttendanceSocket(url: string = WS_BASE_URL) {
     };
 
     ws.onclose = () => {
-      console.log('WebSocket Disconnected');
       setIsConnected(false);
+      console.log('WebSocket Disconnected, reconnecting in 3s...');
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket Error:', error);
+      ws.close();
     };
 
     wsRef.current = ws;
+  }, []);
 
+  useEffect(() => {
+    connect();
     return () => {
-      ws.close();
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
     };
-  }, [url]);
+  }, [connect]);
 
   const sendFrame = useCallback((base64Frame: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

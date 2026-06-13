@@ -1,294 +1,221 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+import json
 import logging
 import asyncio
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+from pydantic import BaseModel
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from core.vision import decode_base64_image, process_frame
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Smart Attendance System API", version="0.1.0")
+app = FastAPI(title="Smart Attendance System API")
 
-# Allow requests from the React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # TODO: Restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Smart Attendance API is running"}
+# --- Database Mock using JSON files ---
+BASE_DIR = Path(__file__).parent
+STUDENTS_FILE = BASE_DIR / "students.json"
+ATTENDANCE_FILE = BASE_DIR / "attendance.json"
 
-from pydantic import BaseModel
-import numpy as np
-import time
-import json
-import os
+def read_json(path: Path, default=list):
+    if not path.exists():
+        return default()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and default == list:
+                return list(data.values())
+            return data
+    except Exception:
+        return default()
 
-class EnrollRequest(BaseModel):
+def write_json(path: Path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+# Load in-memory DB
+students_db = read_json(STUDENTS_FILE, list)
+attendance_db = read_json(ATTENDANCE_FILE, list)
+
+# --- Models ---
+class StudentCreate(BaseModel):
     name: str
     enrollment: str
     branch: str
-    image_base64: str
+    image: str
 
-class UpdateStudentRequest(BaseModel):
+class StudentUpdate(BaseModel):
     name: str
     enrollment: str
     branch: str
 
-# In-memory DB for MVP demonstration, backed by local JSON files
-mock_students = {}      # dict mapping student_id -> { id, name, enrollment, branch, encoding }
-attendance_log = []     # list of { student_id, name, enrollment, branch, timestamp }
-marked_today = set()    # set of student_ids already marked present this session
-state = {
-    "student_counter": 1,
-    "active_session": "Morning Class"
-}
+def get_student_by_id(sid: str):
+    return next((s for s in students_db if s.get("id") == sid), None)
 
-DB_FILE = "students.json"
-LOG_FILE = "attendance.json"
+def get_student_by_enrollment(enrollment: str):
+    return next((s for s in students_db if s.get("enrollment") == enrollment), None)
 
-def load_db():
-    global mock_students, attendance_log, marked_today
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            mock_students = json.load(f)
-            state["student_counter"] = len(mock_students) + 1
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r") as f:
-            attendance_log = json.load(f)
-            today = time.strftime("%Y-%m-%d")
-            for log in attendance_log:
-                if log["timestamp"].startswith(today):
-                    marked_today.add(log["student_id"])
+def calculate_distance(encoding1, encoding2):
+    # Use Mean Absolute Error (MAE) which is much more stable for raw pixel comparisons
+    return float(np.mean(np.abs(np.array(encoding1) - np.array(encoding2))))
 
-def save_db():
-    with open(DB_FILE, "w") as f:
-        json.dump(mock_students, f, indent=4)
-    with open(LOG_FILE, "w") as f:
-        json.dump(attendance_log, f, indent=4)
-
-load_db()
-
-@app.post("/enroll")
-async def enroll_user(req: EnrollRequest):
-    print(f"Enroll Request received for {req.name}")
-    img = decode_base64_image(req.image_base64)
-    if img is not None:
-        result = process_frame(img)
-        print(f"Process Frame Result: {result}")
-        if result.get("status") == "success" and result.get("faces_detected") == 1:
-            student_id = f"STU-{state['student_counter']}"
-            state['student_counter'] += 1
-            
-            mock_students[student_id] = {
-                "id": student_id,
-                "name": req.name,
-                "enrollment": req.enrollment,
-                "branch": req.branch,
-                "encoding": result["encodings"][0]
-            }
-            save_db()
-            print(f"Successfully saved {student_id} to persistent storage.")
-            return {"status": "success", "message": f"Successfully enrolled {req.name}."}
-        print("Failed to enroll: either status not success, or faces_detected != 1")
-        return {"status": "error", "message": "Could not detect exactly one clear face."}
-    print("Invalid image data.")
-    return {"status": "error", "message": "Invalid image data."}
-
-@app.get("/attendance_logs")
-async def get_logs():
-    return {"status": "success", "logs": attendance_log}
-
-@app.get("/export_attendance", response_class=PlainTextResponse)
-async def export_attendance():
-    """Generates a simple, easy-to-read CSV report for the active session."""
-    active_session = state["active_session"]
-    csv_str = f"Attendance Report for: {active_session}\n"
-    csv_str += "Name,Enrollment Number,Branch,Status,Check-In Time\n"
-    
-    # Map student IDs to their timestamp for today's active session
-    record_times = {}
-    today = time.strftime("%Y-%m-%d")
-    for log in attendance_log:
-        if log.get("session_id") == active_session and log["timestamp"].startswith(today):
-            record_times[log["student_id"]] = log["timestamp"]
-            
-    for sid, student in mock_students.items():
-        if sid in marked_today and sid in record_times:
-            status = "Present"
-            check_in = record_times[sid].split(" ")[1] # Extract just the HH:MM:SS
-        else:
-            status = "Absent"
-            check_in = "N/A"
-            
-        csv_str += f"{student['name']},{student['enrollment']},{student['branch']},{status},{check_in}\n"
-        
-    return csv_str
-
-class SessionRequest(BaseModel):
-    session_name: str
-
-@app.post("/set_session")
-async def set_session(req: SessionRequest):
-    global marked_today
-    state["active_session"] = req.session_name
-    # When a new session starts, clear the people who were marked today so they can be marked again for this new class
-    marked_today.clear() 
-    return {"status": "success", "message": f"Session changed to {req.session_name}"}
-
-@app.get("/current_session")
-async def get_current_session():
-    return {"status": "success", "active_session": state["active_session"]}
+# --- API Endpoints ---
 
 @app.get("/students")
-async def get_students():
-    return {"status": "success", "students": list(mock_students.values())}
+def get_students():
+    return {"status": "success", "students": [
+        {"id": s["id"], "name": s["name"], "enrollment": s["enrollment"], "branch": s["branch"]} 
+        for s in students_db
+    ]}
 
-@app.put("/students/{student_id}")
-async def update_student(student_id: str, req: UpdateStudentRequest):
-    if student_id not in mock_students:
-        return {"status": "error", "message": "Student not found"}
-    mock_students[student_id].update({
-        "name": req.name,
-        "enrollment": req.enrollment,
-        "branch": req.branch
-    })
-    save_db()
-    return {"status": "success", "message": "Student updated successfully."}
-
-@app.delete("/students/{student_id}")
-async def delete_student(student_id: str):
-    if student_id in mock_students:
-        global attendance_log, marked_today
-        mock_students.pop(student_id, None)
-        
-        # Purge the student from the live attendance session as well
-        attendance_log = [log for log in attendance_log if log["student_id"] != student_id]
-        if student_id in marked_today:
-            marked_today.remove(student_id)
-            
-        save_db()
-        return {"status": "success", "message": "Student deleted"}
-    return {"status": "error", "message": "Student not found"}
-
-def identify_face(face_encoding):
-    """Compares a live encoding against the mock_students database using a simple distance metric."""
-    if not mock_students:
-        return None, 0.0
-        
-    best_match_id = ""
-    best_distance = float('inf')
+@app.post("/students")
+def enroll_student(student: StudentCreate):
+    if get_student_by_enrollment(student.enrollment):
+        raise HTTPException(status_code=400, detail="Student already enrolled")
     
-    # Simple Euclidean distance since we're using pseudo encodings
-    live_enc = np.array(face_encoding)
-    for sid, student in mock_students.items():
-        db_enc = np.array(student["encoding"])
-        if db_enc.shape != live_enc.shape:
-            continue # Skip legacy low-res or corrupted encodings
-            
-        dist = np.linalg.norm(live_enc - db_enc)
-        if dist < best_distance:
-            best_distance = dist
-            best_match_id = sid
-            
-    # Empirical threshold to physically distinguish between different facial T-zones
-    # Combined with the 10-consecutive-frame streak tracker, 3.5 serves as highly robust (stricter for accuracy)
-    if best_distance < 3.5: 
-        # Map distance (0 to 3.5) into a Confidence Percentage (99.8% to ~50%)
-        conf_float = float(99.8 - ((float(best_distance) / 3.5) * 49.8))
-        confidence = max(0.0, conf_float)
-        return mock_students[best_match_id], round(confidence, 1)
-    return None, 0.0
+    img = decode_base64_image(student.image)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+        
+    vision_result = process_frame(img)
+    if vision_result.get("status") != "success" or not vision_result.get("encodings"):
+        raise HTTPException(status_code=400, detail="No face detected in the image")
+    
+    new_student = {
+        "id": f"student_{len(students_db)+1}_{int(datetime.now().timestamp())}",
+        "name": student.name,
+        "enrollment": student.enrollment,
+        "branch": student.branch,
+        "encoding": vision_result["encodings"][0]
+    }
+    students_db.append(new_student)
+    write_json(STUDENTS_FILE, students_db)
+    return {"status": "success", "message": "Student enrolled successfully"}
+
+@app.put("/students/{sid}")
+def update_student(sid: str, data: StudentUpdate):
+    st = get_student_by_id(sid)
+    if not st:
+        raise HTTPException(status_code=404, detail="Student not found")
+    st["name"] = data.name
+    st["enrollment"] = data.enrollment
+    st["branch"] = data.branch
+    write_json(STUDENTS_FILE, students_db)
+    return {"status": "success", "message": "Student updated"}
+
+@app.delete("/students/{sid}")
+def delete_student(sid: str):
+    global students_db
+    if not get_student_by_id(sid):
+        raise HTTPException(status_code=404, detail="Student not found")
+    students_db = [s for s in students_db if s.get("id") != sid]
+    write_json(STUDENTS_FILE, students_db)
+    return {"status": "success"}
+
+@app.get("/analytics")
+def get_analytics():
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    today_attendance = [a for a in attendance_db if a.get("date") == today_date]
+    unique_present = len(set(a.get("student_id") for a in today_attendance))
+    
+    return {
+        "status": "success",
+        "total_students": len(students_db),
+        "present_today": unique_present,
+        "recent_logs": sorted(attendance_db, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]
+    }
+
+# --- WebSockets ---
 
 @app.websocket("/ws/attendance")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_attendance(websocket: WebSocket):
     await websocket.accept()
-    logger.info("WebSocket connection established")
-    
-    # Track the previous frame's facial geometry to calculate liveness
-    last_locations = []
-    
-    # Track consecutive identical identifications to prevent random fluttering cross-matches
-    match_streaks = {}
+    previous_faces = []
     
     try:
         while True:
-            # We will receive binary base64 frames here
             data = await websocket.receive_text()
-            
-            # Process frame asynchronously by throwing it to a background thread to prevent blocking
             img = decode_base64_image(data)
+            
             if img is not None:
-                loop = asyncio.get_event_loop()
-                # Run the synchronous CPU-bound face_recognition in an executor
-                result = await loop.run_in_executor(None, process_frame, img, last_locations)
+                vision_result = process_frame(img, previous_faces)
+                response = {"status": "identifying", "faces": []}
                 
-                if result.get("status") == "success":
-                    faces = []
-                    encodings = result.get("encodings", [])
-                    locations = result.get("locations", [])
+                if vision_result.get("status") == "success":
+                    previous_faces = vision_result.get("locations", [])
                     
-                    # Update tracked locations for the next frame
-                    last_locations = locations
-                    
-                    # Track who was seen in this exact single frame
-                    seen_this_frame = set()
-                    
-                    for i, encoding in enumerate(encodings):
-                        student, confidence = identify_face(encoding)
-                        if student:
-                            sid = student["id"]
-                            seen_this_frame.add(sid)
+                    for i, encoding in enumerate(vision_result.get("encodings", [])):
+                        loc = vision_result["locations"][i]
+                        
+                        best_match = None
+                        best_dist = float('inf')
+                        
+                        for st in students_db:
+                            if "encoding" in st:
+                                dist = calculate_distance(encoding, st["encoding"])
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_match = st
+                        
+                        # Confidence mapping
+                        # Using MAE, < 0.18 is usually a good match for identical faces with slight noise
+                        threshold = 0.18
+                        is_known = False
+                        confidence = 0
+                        student_data = None
+                        just_marked = False
+                        
+                        if best_dist < threshold and best_match:
+                            is_known = True
+                            # Map distance 0 -> 100%, threshold -> 50%
+                            confidence = int(max(0, min(100, (1 - (best_dist / (threshold * 2))) * 100)))
+                            student_data = {
+                                "id": best_match["id"],
+                                "name": best_match["name"],
+                                "enrollment": best_match["enrollment"]
+                            }
                             
-                            # Increment their uninterrupted streak
-                            match_streaks[sid] = match_streaks.get(sid, 0) + 1
-                            
-                            # Mark attendance logic ONLY if streak >= 5 (highly reliable without being overly strict)
-                            just_marked = False
-                            if match_streaks[sid] >= 5 and sid not in marked_today:
-                                marked_today.add(sid)
-                                attendance_log.insert(0, {
-                                    "student_id": sid,
-                                    "name": student["name"],
-                                    "enrollment": student["enrollment"],
-                                    "branch": student["branch"],
-                                    "session_id": state["active_session"],
-                                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-                                })
-                                save_db()
-                                just_marked = True
-                            
-                            faces.append({
-                                "type": "known",
-                                "box": locations[i],
-                                "student": student,
-                                "confidence": confidence,
-                                "just_marked": just_marked
-                            })
-                        else:
-                            faces.append({
-                                "type": "unknown",
-                                "box": locations[i]
-                            })
-                            
-                    # Reset streaks for anyone NOT securely identified in this frame
-                    # This guarantees the matches must be purely consecutive
-                    for known_id in list(match_streaks.keys()):
-                        if known_id not in seen_this_frame:
-                            match_streaks[known_id] = 0
-                            
-                            
-                    await websocket.send_json({"status": "identifying", "faces": faces, "message": f"Processing {len(faces)} faces"})
-                else:
-                    await websocket.send_json({"status": "no_face", "faces": [], "message": "Scanning... No faces detected."})
-            else:
-                await websocket.send_json({"status": "error", "message": "Error decoding frame."})
+                            # Mark attendance if live and confident enough
+                            if loc.get("is_live", False) and confidence > 50:
+                                today_str = datetime.now().strftime("%Y-%m-%d")
+                                already_marked = any(
+                                    a.get("student_id") == best_match["id"] and a.get("date") == today_str 
+                                    for a in attendance_db
+                                )
+                                if not already_marked:
+                                    attendance_db.append({
+                                        "student_id": best_match["id"],
+                                        "name": best_match["name"],
+                                        "date": today_str,
+                                        "timestamp": datetime.now().isoformat()
+                                    })
+                                    write_json(ATTENDANCE_FILE, attendance_db)
+                                    just_marked = True
+
+                        response["faces"].append({
+                            "type": "known" if is_known else "unknown",
+                            "student": student_data,
+                            "confidence": confidence,
+                            "box": loc,
+                            "just_marked": just_marked
+                        })
+                
+                await websocket.send_json(response)
+            
+            await asyncio.sleep(0.01)
+            
     except WebSocketDisconnect:
-        logger.info("WebSocket disconnected gracefully")
+        logger.info("Client disconnected")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")

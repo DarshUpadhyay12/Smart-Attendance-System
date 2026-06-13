@@ -139,24 +139,25 @@ function App() {
   }, [lastMessage, isStreaming]);
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-dark">
-      {/* 3D Background */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-        <Canvas camera={{ position: [0, 0, 5] }}>
-          <ambientLight intensity={0.5} />
-          <ParticleSphere isScanning={isScanning} />
-        </Canvas>
-      </div>
+    <div className="relative w-full h-screen overflow-hidden bg-dark flex flex-col">
 
       {/* Main UI Layout */}
-      <div className="relative z-10 flex flex-col w-full h-screen p-0 md:p-4 lg:p-6 overflow-y-auto custom-scrollbar">
+      <div className="relative z-10 flex flex-col w-full h-full p-0 md:p-4 lg:p-8">
         
         {/* Main Application Container */}
-        <div className="flex-1 flex flex-col items-center w-full min-h-full">
-          <div className="glass-panel my-auto rounded-none md:rounded-2xl p-4 md:p-6 lg:p-8 w-full md:max-w-4xl flex flex-col items-center text-center space-y-4 md:space-y-6 shadow-2xl relative">
+        <div className="flex-1 flex flex-col items-center justify-center w-full h-full">
+          <div className="glass-panel rounded-none md:rounded-2xl pt-4 px-4 pb-0 md:pt-6 md:px-6 md:pb-2 lg:pt-8 lg:px-8 w-full h-full md:h-auto md:max-h-full md:max-w-4xl flex flex-col items-center text-center shadow-[0_0_50px_rgba(176,38,255,0.15)] relative overflow-hidden">
             
+            {/* 3D Background - perfectly bounded inside the panel */}
+            <div className="absolute inset-0 z-0 pointer-events-none opacity-80">
+              <Canvas camera={{ position: [0, 0, 5] }}>
+                <ambientLight intensity={0.5} />
+                <ParticleSphere isScanning={isScanning} />
+              </Canvas>
+            </div>
+
             {/* Responsive Scrollable Tabs */}
-            <div className="flex bg-black/40 p-1 rounded-lg w-full mb-2 relative z-20 overflow-x-auto hide-scrollbar snap-x">
+            <div className="flex bg-black/40 p-1 rounded-lg w-full mb-2 relative z-20 overflow-x-auto hide-scrollbar snap-x shrink-0">
               <button 
                 className={`flex-none md:flex-1 px-4 py-3 md:py-2 text-sm font-semibold rounded-md transition-all outline-none snap-start whitespace-nowrap ${activeTab === 'attendance' ? 'bg-neonPurple text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
                 onClick={() => setActiveTab('attendance')}
@@ -183,7 +184,9 @@ function App() {
               </button>
             </div>
 
-            {activeTab === 'attendance' ? (
+            {/* Scrollable Content Wrapper */}
+            <div className="w-full flex-1 overflow-y-auto custom-scrollbar flex flex-col items-center relative z-10 pt-4 pb-8 space-y-4 md:space-y-6">
+              {activeTab === 'attendance' ? (
               <>
                 <div className="flex items-center justify-center w-20 h-20 rounded-full bg-white/10 border border-white/20">
                   <Camera className={`w-10 h-10 ${isScanning ? 'text-neonGreen animate-pulse' : 'text-neonPurple'}`} />
@@ -268,6 +271,7 @@ function App() {
             ) : (
               <AnalyticsDashboard />
             )}
+            </div>
           </div>
         </div>
       </div>

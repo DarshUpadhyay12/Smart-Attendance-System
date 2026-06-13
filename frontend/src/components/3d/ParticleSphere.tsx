@@ -1,50 +1,59 @@
-import { useRef, useMemo } from 'react'
-import { useFrame } from '@react-three/fiber'
-import * as THREE from 'three'
+import { useRef } from 'react';
+import { useFrame } from '@react-three/fiber';
+import * as THREE from 'three';
 
-interface ParticleSphereProps {
-  isScanning: boolean;
-}
+export function ParticleSphere({ isScanning }: { isScanning: boolean }) {
+  const pointsRef = useRef<THREE.Points>(null);
 
-export function ParticleSphere({ isScanning }: ParticleSphereProps) {
-  const pointsRef = useRef<THREE.Points>(null!)
+  // Generate random points on a sphere
+  const particlesCount = 2000;
+  const positions = new Float32Array(particlesCount * 3);
   
-  const particleCount = 2000
-  const positions = useMemo(() => {
-    const pos = new Float32Array(particleCount * 3)
-    for (let i = 0; i < particleCount; i++) {
-      const theta = Math.random() * 2 * Math.PI
-      const phi = Math.acos(Math.random() * 2 - 1)
-      const r = 2.5 + Math.random() * 0.8
-      
-      pos[i * 3] = r * Math.sin(phi) * Math.cos(theta)
-      pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta)
-      pos[i * 3 + 2] = r * Math.cos(phi)
-    }
-    return pos
-  }, [particleCount])
+  for(let i = 0; i < particlesCount * 3; i+=3) {
+    // Math to spread points on a sphere
+    const r = 2.5;
+    const theta = 2 * Math.PI * Math.random();
+    const phi = Math.acos(2 * Math.random() - 1);
+    
+    positions[i] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i+1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i+2] = r * Math.cos(phi);
+  }
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     if (pointsRef.current) {
-      pointsRef.current.rotation.y -= delta * (isScanning ? 0.8 : 0.1)
-      pointsRef.current.rotation.x -= delta * 0.05
+      pointsRef.current.rotation.y += delta * (isScanning ? 0.5 : 0.05);
+      pointsRef.current.rotation.x += delta * (isScanning ? 0.2 : 0.02);
+      
+      if (isScanning) {
+        const material = pointsRef.current.material as THREE.PointsMaterial;
+        // Pulse color
+        const s = Math.sin(state.clock.elapsedTime * 5) * 0.5 + 0.5;
+        material.color.setHSL(0.3 + (s * 0.1), 1, 0.5); // Green-ish pulse
+      } else {
+        const material = pointsRef.current.material as THREE.PointsMaterial;
+        material.color.setHex(0xb026ff); // neon purple
+      }
     }
-  })
-
-  const color = isScanning ? "#39ff14" : "#b026ff" // Neon Green vs Neon Purple
+  });
 
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
         <bufferAttribute
           attach="attributes-position"
-          args={[positions, 3]}
-          count={positions.length / 3}
+          count={particlesCount}
           array={positions}
           itemSize={3}
         />
       </bufferGeometry>
-      <pointsMaterial size={0.03} color={color} transparent opacity={0.7} sizeAttenuation={true} />
+      <pointsMaterial 
+        size={0.02} 
+        color="#b026ff" 
+        transparent 
+        opacity={0.6}
+        sizeAttenuation 
+      />
     </points>
-  )
+  );
 }
