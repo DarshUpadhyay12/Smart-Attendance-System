@@ -40,6 +40,7 @@ export function ParticleSphere({ isScanning }: { isScanning: boolean }) {
   return (
     <points ref={pointsRef}>
       <bufferGeometry>
+        {/* @ts-ignore - React Three Fiber type mismatch */}
         <bufferAttribute
           attach="attributes-position"
           count={particlesCount}
